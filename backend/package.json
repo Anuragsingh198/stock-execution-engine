@@ -1,0 +1,41 @@
+{
+  "name": "order-execution-engine",
+  "version": "1.0.0",
+  "description": "Production-grade Order Execution Engine with DEX routing and real-time WebSocket updates",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts"
+  },
+  "keywords": [
+    "order-execution",
+    "dex-routing",
+    "websocket",
+    "bullmq"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@fastify/cors": "^8.5.0",
+    "@fastify/websocket": "^8.3.0",
+    "@upstash/redis": "^1.35.8",
+    "bullmq": "^5.4.4",
+    "dotenv": "^16.3.1",
+    "fastify": "^4.24.3",
+    "ioredis": "^5.3.2",
+    "pg": "^8.11.3",
+    "uuid": "^9.0.1",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.11",
+    "@types/node": "^20.10.5",
+    "@types/pg": "^8.10.9",
+    "@types/uuid": "^9.0.7",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
