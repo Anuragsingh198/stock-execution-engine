@@ -2,8 +2,49 @@
 
 A production-grade backend Order Execution Engine that processes MARKET orders with DEX routing and real-time WebSocket status updates.
 
+🌐 **Live Demo**: [http://13.53.177.26/](http://13.53.177.26/)
+
+## Demo Video
+
+Watch the full application demo:
+
+<video ttps://drive.google.com/file/d/1lPQuR74OeLIG2MJoCFNfZxGFBkVTwxS_/preview" width="640" height="480" allow="autoplay" allowfullscreen></video>
+
+**Direct Link**: [View on Google Drive](https://drive.google.com/file/d/1lPQuR74OeLIG2MJoCFNfZxGFBkVTwxS_/view?usp=drive_link)
+
+The demo showcases:
+- Order creation workflow
+- Real-time order status updates via WebSocket
+- Order history and filtering
+- Dashboard with recent orders
+- Complete order lifecycle from creation to confirmation
+
+🌐 **Try it live**: [http://13.53.177.26/](http://13.53.177.26/)
+
+## Application Screenshots
+
+#### Dashboard View
+![Dashboard](documets/dahsboard.png)
+
+#### Orders List
+![All Orders](documets/allordres.png)
+
+#### Dashboard with Orders
+![Dashboard Orders](documets/dashboardorders.png)
+
+#### Order Creation Form
+![Order Form](documets/orderform.png)
+
+#### Order Response Examples
+![Response 1](documets/reponseform1.png)
+![Response 2](documets/response2.png)
+![Response 4](documets/reponse4.png)
+![Response 5](documets/reponse5.png)
+
 ## Table of Contents
 
+- [Demo Video](#demo-video)
+- [Application Screenshots](#application-screenshots)
 - [Architecture](#architecture)
 - [Design Decisions](#design-decisions)
 - [Tech Stack](#tech-stack)
@@ -13,7 +54,6 @@ A production-grade backend Order Execution Engine that processes MARKET orders w
 - [API Documentation](#api-documentation)
 - [Order Lifecycle](#order-lifecycle)
 - [DEX Routing](#dex-routing)
-- [Testing](#testing)
 - [Extending to Other Order Types](#extending-to-other-order-types)
 - [AWS Deployment](#aws-deployment)
 
@@ -457,34 +497,6 @@ All status changes are:
 - **Fees**: Realistic trading fees per DEX
 - **Deterministic**: Same token pair produces consistent base price
 
-## Testing
-
-Run all tests:
-```bash
-npm test
-```
-
-Run with coverage:
-```bash
-npm run test:coverage
-```
-
-### Test Coverage
-
-The test suite includes:
-
-1. **DEX Router Tests**: Quote calculation, best route selection
-2. **Order Service Tests**: Order creation, lifecycle management, event publishing
-3. **Event Publisher Tests**: Status-specific queue publishing, priority handling
-4. **WebSocket Worker Tests**: Event processing, parallel delivery
-5. **WebSocket Manager Tests**: Multiple connection management, parallel emission
-6. **Queue Tests**: Job addition, retry logic (order queue + status queues)
-7. **Validation Tests**: Input validation edge cases
-8. **Model Tests**: Database operations
-9. **Integration Tests**: Full order lifecycle, event-driven WebSocket delivery
-10. **Route Tests**: HTTP endpoint behavior
-
-## Extending to Other Order Types
 
 ### Limit Orders
 
@@ -596,13 +608,6 @@ export interface SniperOrderRequest extends OrderRequest {
 
 Deploy to AWS EC2 using Docker Compose - a simple and cost-effective method that runs both backend and frontend on a single EC2 instance.
 
-### Prerequisites
-
-- AWS EC2 instance (Ubuntu 22.04, t3.medium or larger)
-- Security groups: Allow HTTP (port 80), SSH (port 22)
-- Managed PostgreSQL database (Neon, Supabase, or AWS RDS)
-- Managed Redis instance (Upstash or AWS ElastiCache)
-
 ### Quick Deployment
 
 #### 1. Launch EC2 Instance
@@ -629,7 +634,7 @@ sudo usermod -aG docker $USER
 
 ```bash
 # Clone project
-git clone https://github.com/your-username/stockproject.git
+git clone url
 cd stockproject
 
 # Configure environment
@@ -649,6 +654,8 @@ docker-compose ps
 ```
 
 Access your application at: `http://your-ec2-public-ip`
+
+**Live Deployment**: [http://13.53.177.26/](http://13.53.177.26/)
 
 ### Common Commands
 
@@ -672,40 +679,6 @@ docker-compose logs -f backend
 - **DNS**: Point domain A record to Elastic IP
 - **SSL**: Use Let's Encrypt with Certbot for HTTPS
 
-### Application Screenshots
-
-#### Dashboard View
-![Dashboard](documets/dahsboard.png)
-
-#### Orders List
-![All Orders](documets/allordres.png)
-
-#### Dashboard with Orders
-![Dashboard Orders](documets/dashboardorders.png)
-
-#### Order Creation Form
-![Order Form](documets/orderform.png)
-
-#### Order Response Examples
-![Response 1](documets/reponseform1.png)
-![Response 2](documets/response2.png)
-![Response 4](documets/reponse4.png)
-![Response 5](documets/reponse5.png)
-
-### Demo Video
-
-Watch the full application demo:
-
-<iframe src="https://drive.google.com/file/d/1lPQuR74OeLIG2MJoCFNfZxGFBkVTwxS_/preview" width="640" height="480" allow="autoplay" allowfullscreen></iframe>
-
-**Direct Link**: [View on Google Drive](https://drive.google.com/file/d/1lPQuR74OeLIG2MJoCFNfZxGFBkVTwxS_/view?usp=drive_link)
-
-The demo showcases:
-- Order creation workflow
-- Real-time order status updates via WebSocket
-- Order history and filtering
-- Dashboard with recent orders
-- Complete order lifecycle from creation to confirmation
 
 
 ### Environment Variables
