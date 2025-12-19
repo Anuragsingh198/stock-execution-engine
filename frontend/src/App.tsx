@@ -3,6 +3,7 @@ import { Dashboard } from './pages/Dashboard';
 import { CreateOrder } from './pages/CreateOrder';
 import { OrderStatus } from './pages/OrderStatus';
 import { OrdersList } from './pages/OrdersList';
+import { getNetworkDisplayName } from './utils/solana.utils';
 import './App.css';
 
 function App() {
@@ -24,6 +25,9 @@ function App() {
               <Link to="/orders/create" className="nav-link">
                 Create Order
               </Link>
+              <div className="nav-network-badge">
+                🌐 {getNetworkDisplayName()}
+              </div>
             </div>
           </div>
         </nav>

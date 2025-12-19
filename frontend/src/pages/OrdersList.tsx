@@ -51,25 +51,29 @@ export function OrdersList() {
           className={filter === 'all' ? 'active' : ''}
           onClick={() => setFilter('all')}
         >
-          All
+          All ({orders.length})
         </button>
         <button
           className={filter === 'pending' ? 'active' : ''}
           onClick={() => setFilter('pending')}
         >
-          Pending
+          Pending ({orders.filter(o => o.status === 'pending').length})
         </button>
         <button
           className={filter === 'confirmed' ? 'active' : ''}
           onClick={() => setFilter('confirmed')}
         >
-          Confirmed
+          Confirmed ({orders.filter(o => o.status === 'confirmed').length})
         </button>
         <button
           className={filter === 'failed' ? 'active' : ''}
           onClick={() => setFilter('failed')}
+          style={orders.filter(o => o.status === 'failed').length > 0 ? {
+            borderColor: '#ef4444',
+            color: orders.filter(o => o.status === 'failed').length > 0 ? '#ef4444' : undefined
+          } : {}}
         >
-          Failed
+          Failed ({orders.filter(o => o.status === 'failed').length})
         </button>
       </div>
 
@@ -80,9 +84,20 @@ export function OrdersList() {
       ) : (
         <div className="orders-grid">
           {filteredOrders.length === 0 ? (
-            <div className="no-orders">No orders found</div>
+            <div className="no-orders">
+              {filter === 'failed' 
+                ? 'No failed orders. Great! 🎉' 
+                : 'No orders found'}
+            </div>
           ) : (
-            filteredOrders.map((order) => <OrderCard key={order.orderId} order={order} />)
+            <>
+              {filter === 'failed' && filteredOrders.length > 0 && (
+                <div className="failed-orders-warning">
+                  ⚠️ {filteredOrders.length} order(s) failed. Click on any order to see error details.
+                </div>
+              )}
+              {filteredOrders.map((order) => <OrderCard key={order.orderId} order={order} />)}
+            </>
           )}
         </div>
       )}

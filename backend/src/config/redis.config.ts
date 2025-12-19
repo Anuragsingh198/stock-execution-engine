@@ -10,10 +10,10 @@ export class RedisClient {
       if (!process.env.REDIS_URL) {
         throw new Error("REDIS_URL is not defined");
       }
-
       RedisClient.instance = new Redis(process.env.REDIS_URL, {
-        tls: {}, 
-        maxRetriesPerRequest: null,
+        tls: {},                    
+        maxRetriesPerRequest: null,   
+        enableOfflineQueue: true,     
         enableReadyCheck: true,
       });
 

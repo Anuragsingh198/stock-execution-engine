@@ -3,11 +3,11 @@ import websocket from '@fastify/websocket';
 import cors from '@fastify/cors';
 import { registerOrderRoutes } from './routes/orders.routes';
 import { OrderWorker } from './workers/order.worker';
+import { WebSocketWorker } from './workers/websocket.worker';
 import { Database } from './config/database.config';
 import { RedisClient } from './config/redis.config';
 import dotenv from 'dotenv';
 
-// Load environment variables
 dotenv.config();
 
 const PORT = parseInt(process.env.PORT || '3000');
@@ -20,23 +20,19 @@ async function buildServer() {
     },
   });
 
-  // Register CORS plugin
   await fastify.register(cors, {
-    origin: true, // Allow all origins in development
+    origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
-  // Register WebSocket plugin
   await fastify.register(websocket);
 
-  // Health check endpoint
   fastify.get('/health', async () => {
     return { status: 'ok', timestamp: new Date() };
   });
 
-  // Register order routes
   await fastify.register(registerOrderRoutes);
 
   return fastify;
@@ -55,8 +51,11 @@ async function start() {
       console.error('\n❌ Redis connection failed!');
       throw error;
     }
-    const worker = OrderWorker.getInstance();
+    const orderWorker = OrderWorker.getInstance();
     console.log('✓ Order worker started');
+
+    const wsWorker = WebSocketWorker.getInstance();
+    console.log('✓ WebSocket worker started');
 
     const server = await buildServer();
     await server.listen({ port: PORT, host: HOST });
@@ -66,7 +65,8 @@ async function start() {
       console.log(`\n${signal} received, shutting down gracefully...`);
       
       await server.close();
-      await worker.close();
+      await orderWorker.close();
+      await wsWorker.close();
       await redis.quit();
       console.log('✓ Server shut down complete');
       process.exit(0);

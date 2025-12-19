@@ -20,7 +20,6 @@ export class WebSocketService {
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
-          console.log(`WebSocket connected for order: ${this.orderId}`);
           this.reconnectAttempts = 0;
           this.emit('connected', { orderId: this.orderId });
           resolve();
@@ -31,7 +30,7 @@ export class WebSocketService {
             const data: SocketMessage = JSON.parse(event.data);
             this.handleMessage(data);
           } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
+            console.error('[WebSocketService] Error parsing WebSocket message:', error);
           }
         };
 
@@ -42,7 +41,6 @@ export class WebSocketService {
         };
 
         this.ws.onclose = () => {
-          console.log(`WebSocket closed for order: ${this.orderId}`);
           this.emit('closed', {});
           this.attemptReconnect();
         };
@@ -53,13 +51,11 @@ export class WebSocketService {
   }
 
   private handleMessage(data: any) {
-    // Check if it's a SocketMessage with type field
     if (data.type === 'connected') {
       this.emit('connected', data);
     } else if (data.type === 'pong') {
       this.emit('pong', data);
     } else if (data.status) {
-      // OrderUpdate message (has status field, no type field)
       const update: OrderUpdate = {
         orderId: data.orderId || this.orderId,
         status: data.status,
@@ -69,10 +65,8 @@ export class WebSocketService {
         errorReason: data.errorReason,
         timestamp: data.timestamp || new Date().toISOString(),
       };
+      
       this.emit('update', update);
-    } else {
-      // Unknown message format, log it
-      console.warn('Unknown WebSocket message format:', data);
     }
   }
 
@@ -80,9 +74,7 @@ export class WebSocketService {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       setTimeout(() => {
-        console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
         this.connect().catch(() => {
-          // Reconnection failed, will try again
         });
       }, this.reconnectDelay * this.reconnectAttempts);
     }

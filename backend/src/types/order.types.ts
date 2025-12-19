@@ -43,6 +43,8 @@ export interface DexQuote {
   fee: string;
   amountOut: string;
   latency: number; // ms
+  poolAddress?: string; // Pool address for transaction building
+  poolInfo?: any; // Additional pool information for transaction building
 }
 
 export interface OrderUpdate {

@@ -37,11 +37,8 @@ export class Database {
   }
 
   public async query(text: string, params?: any[]): Promise<any> {
-    const start = Date.now();
     try {
       const result = await this.pool.query(text, params);
-      const duration = Date.now() - start;
-      console.log(`Query executed in ${duration}ms: ${text.substring(0, 50)}...`);
       return result;
     } catch (error) {
       console.error('Database query error:', error);

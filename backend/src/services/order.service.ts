@@ -1,25 +1,26 @@
 import { v4 as uuidv4 } from 'uuid';
-import { Order, OrderRequest, OrderStatus, OrderUpdate } from '../types/order.types';
+import { VersionedTransaction } from '@solana/web3.js';
+import { Order, OrderRequest, OrderStatus, OrderUpdate, DexQuote } from '../types/order.types';
 import { OrderModel } from '../models/order.model';
 import { DexRouterService } from './dex.router.service';
-import { WebSocketManager } from '../utils/websocket.manager';
+import { EventPublisher } from './event.publisher';
+import { SolanaConfig } from '../config/solana.config';
 
 export class OrderService {
   private orderModel: OrderModel;
   private dexRouter: DexRouterService;
-  private wsManager: WebSocketManager;
-  private readonly EXECUTION_TIME_MIN = 2000; // 2 seconds
-  private readonly EXECUTION_TIME_MAX = 3000; // 3 seconds
+  private eventPublisher: EventPublisher;
+  private solanaConfig: SolanaConfig;
+  private readonly CONFIRMATION_TIMEOUT = 60000; // 60 seconds
+  private statusHistory: Map<string, OrderStatus[]> = new Map(); // Track status history per order
 
   constructor() {
     this.orderModel = new OrderModel();
     this.dexRouter = new DexRouterService();
-    this.wsManager = WebSocketManager.getInstance();
+    this.eventPublisher = EventPublisher.getInstance();
+    this.solanaConfig = SolanaConfig.getInstance();
   }
 
-  /**
-   * Create a new order with PENDING status
-   */
   public async createOrder(orderRequest: OrderRequest): Promise<Order> {
     const orderId = uuidv4();
     const now = new Date();
@@ -37,29 +38,22 @@ export class OrderService {
     };
 
     await this.orderModel.create(order);
-    console.log(`[Order Service] Created order ${orderId} with status PENDING`);
-
-    // Emit PENDING status update if WebSocket connection exists
-    const pendingUpdate: OrderUpdate = {
-      orderId,
-      status: OrderStatus.PENDING,
-      timestamp: now,
-    };
-    await this.wsManager.emit(orderId, pendingUpdate);
+    await this.updateOrderStatus(orderId, OrderStatus.PENDING);
 
     return order;
   }
 
-  /**
-   * Execute order through full lifecycle
-   */
   public async executeOrder(orderId: string): Promise<void> {
     try {
-      // Step 1: Routing
       await this.updateOrderStatus(orderId, OrderStatus.ROUTING);
       const order = await this.orderModel.findById(orderId);
       if (!order) {
         throw new Error(`Order ${orderId} not found`);
+      }
+
+      const hasBalance = await this.solanaConfig.hasSufficientBalance(0.01);
+      if (!hasBalance) {
+        throw new Error('Insufficient SOL balance. Please fund your wallet via https://faucet.solana.com');
       }
 
       const orderRequest: OrderRequest = {
@@ -70,54 +64,148 @@ export class OrderService {
         minAmountOut: order.minAmountOut,
       };
 
-      const bestQuote = await this.dexRouter.findBestRoute(orderRequest);
+      let bestQuote: DexQuote;
+      try {
+        bestQuote = await this.dexRouter.findBestRoute(orderRequest);
+      } catch (error: any) {
+        throw new Error(`DEX routing failed: ${error.message}`);
+      }
 
-      // Step 2: Building transaction
       await this.updateOrderStatus(orderId, OrderStatus.BUILDING, {
         dexType: bestQuote.dex,
       });
 
-      // Step 3: Submit transaction
-      await this.updateOrderStatus(orderId, OrderStatus.SUBMITTED);
+      let transaction: VersionedTransaction;
+      try {
+        transaction = await this.dexRouter.buildSwapTransaction(orderRequest, bestQuote);
+      } catch (error: any) {
+        throw new Error(`Transaction building failed: ${error.message}`);
+      }
 
-      // Step 4: Execute transaction (mock)
-      const executionTime = this.EXECUTION_TIME_MIN + Math.random() * (this.EXECUTION_TIME_MAX - this.EXECUTION_TIME_MIN);
-      await new Promise((resolve) => setTimeout(resolve, executionTime));
+      let txHash: string;
+      try {
+        txHash = await this.signAndSubmitTransaction(transaction);
+      } catch (error: any) {
+        throw new Error(`Transaction submission failed: ${error.message}`);
+      }
+      
+      await this.updateOrderStatus(orderId, OrderStatus.SUBMITTED, {
+        txHash,
+      });
 
-      // Step 5: Check slippage and confirm
+      const confirmed = await this.waitForConfirmation(txHash);
+
+      if (!confirmed) {
+        throw new Error('Transaction confirmation timeout');
+      }
+
       const finalPrice = this.applySlippageProtection(
         bestQuote.effectivePrice,
         order.slippageTolerance,
         bestQuote.quotePrice
       );
 
-      const txHash = this.generateMockTxHash();
-
       await this.updateOrderStatus(orderId, OrderStatus.CONFIRMED, {
         executedPrice: finalPrice,
         txHash,
       });
-
-      console.log(`[Order Service] Order ${orderId} executed successfully with price ${finalPrice}`);
     } catch (error: any) {
       console.error(`[Order Service] Order ${orderId} execution failed:`, error);
-      await this.updateOrderStatus(orderId, OrderStatus.FAILED, {
-        errorReason: error.message || 'Unknown error',
+      
+      const errorMessage = error.message || 'Unknown error';
+      
+      // Publish FAILED status event - WebSocket worker will handle delivery
+      try {
+        await this.updateOrderStatus(orderId, OrderStatus.FAILED, {
+          errorReason: errorMessage,
+        });
+      } catch (statusError: any) {
+        console.error(`[Order Service] Failed to update status to FAILED:`, statusError);
+        // Still try to update DB directly as fallback
+        try {
+          await this.orderModel.updateStatus(orderId, OrderStatus.FAILED, {
+            errorReason: errorMessage,
+          });
+        } catch (dbError: any) {
+          console.error(`[Order Service] Database update for FAILED status also failed:`, dbError);
+        }
+      }
+      
+      throw error;
+    }
+  }
+
+  private async signAndSubmitTransaction(transaction: VersionedTransaction): Promise<string> {
+    try {
+      const wallet = this.solanaConfig.getWallet();
+      const connection = this.solanaConfig.getConnection();
+
+      transaction.sign([wallet]);
+
+      const signature = await connection.sendTransaction(transaction, {
+        skipPreflight: false,
+        maxRetries: 3,
       });
+
+      return signature;
+    } catch (error: any) {
+      console.error('[Order Service] Transaction submission error:', error);
+      throw new Error(`Transaction submission failed: ${error.message}`);
+    }
+  }
+
+  private async waitForConfirmation(signature: string): Promise<boolean> {
+    try {
+      const connection = this.solanaConfig.getConnection();
+
+      const confirmation = await Promise.race([
+        connection.confirmTransaction(signature, 'confirmed'),
+        new Promise<null>((resolve) => 
+          setTimeout(() => resolve(null), this.CONFIRMATION_TIMEOUT)
+        ),
+      ]);
+
+      if (!confirmation) {
+        return false;
+      }
+
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+      }
+
+      return true;
+    } catch (error: any) {
+      console.error('[Order Service] Confirmation error:', error);
       throw error;
     }
   }
 
   /**
-   * Update order status and emit WebSocket event
+   * Update order status and publish event to status-specific queue
+   * This is now event-driven - the WebSocket worker will handle delivery
    */
   private async updateOrderStatus(
     orderId: string,
     status: OrderStatus,
     additionalData?: Partial<Order>
   ): Promise<void> {
-    await this.orderModel.updateStatus(orderId, status, additionalData);
+    const timestamp = new Date();
+    
+    if (!this.statusHistory.has(orderId)) {
+      this.statusHistory.set(orderId, []);
+    }
+    const history = this.statusHistory.get(orderId)!;
+    history.push(status);
+    
+    // Update database first
+    try {
+      await this.orderModel.updateStatus(orderId, status, additionalData);
+    } catch (dbError: any) {
+      console.error(`[Order Service] Database update failed:`, dbError);
+      // Continue even if DB update fails - we still want to emit the event
+    }
 
+    // Publish event to status-specific queue (non-blocking, event-driven)
     const update: OrderUpdate = {
       orderId,
       status,
@@ -125,15 +213,19 @@ export class OrderService {
       executedPrice: additionalData?.executedPrice,
       txHash: additionalData?.txHash,
       errorReason: additionalData?.errorReason,
-      timestamp: new Date(),
+      timestamp: timestamp,
     };
 
-    await this.wsManager.emit(orderId, update);
+    try {
+      // Publish to queue - WebSocket worker will handle delivery
+      // This is non-blocking and allows parallel processing
+      await this.eventPublisher.publishStatusUpdate(update);
+    } catch (error: any) {
+      console.error(`[Order Service] Failed to publish status update:`, error);
+      // Don't throw - order execution should continue even if event publishing fails
+    }
   }
 
-  /**
-   * Apply slippage protection logic
-   */
   private applySlippageProtection(
     expectedPrice: string,
     slippageTolerance: number,
@@ -144,38 +236,18 @@ export class OrderService {
     const slippagePercent = Math.abs((quoted - expected) / expected) * 100;
 
     if (slippagePercent > slippageTolerance) {
-      // Apply maximum slippage protection
       const slippageMultiplier = 1 - slippageTolerance / 100;
       return (expected * slippageMultiplier).toFixed(8);
     }
 
-    // Small random variance to simulate real execution
-    const variance = 1 - (Math.random() * 0.001); // 0.1% max variance
+    const variance = 1 - (Math.random() * 0.001);
     return (parseFloat(expectedPrice) * variance).toFixed(8);
   }
 
-  /**
-   * Generate mock transaction hash
-   */
-  private generateMockTxHash(): string {
-    const chars = '0123456789abcdef';
-    let hash = '0x';
-    for (let i = 0; i < 64; i++) {
-      hash += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return hash;
-  }
-
-  /**
-   * Get order by ID
-   */
   public async getOrder(orderId: string): Promise<Order | null> {
     return await this.orderModel.findById(orderId);
   }
 
-  /**
-   * Get all orders
-   */
   public async getAllOrders(limit: number = 100, offset: number = 0): Promise<Order[]> {
     return await this.orderModel.findAll(limit, offset);
   }

@@ -24,7 +24,6 @@ export class OrderWorker {
 
     this.worker = new Worker('order-execution', this.processJob.bind(this), workerOptions);
     this.setupEventHandlers();
-    console.log(`Order worker initialized with concurrency: ${maxConcurrency}`);
   }
 
   public static getInstance(): OrderWorker {
@@ -36,22 +35,16 @@ export class OrderWorker {
 
   private async processJob(job: any): Promise<void> {
     const { orderId } = job.data;
-    console.log(`[Order Worker] Processing order ${orderId}`);
 
     try {
       await this.orderService.executeOrder(orderId);
-      console.log(`[Order Worker] Successfully processed order ${orderId}`);
     } catch (error: any) {
       console.error(`[Order Worker] Failed to process order ${orderId}:`, error);
-      throw error; // BullMQ will handle retry
+      throw error;
     }
   }
 
   private setupEventHandlers(): void {
-    this.worker.on('completed', (job) => {
-      console.log(`[Order Worker] Job ${job.id} completed`);
-    });
-
     this.worker.on('failed', (job, err) => {
       console.error(`[Order Worker] Job ${job?.id} failed:`, err);
     });

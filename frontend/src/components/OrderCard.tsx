@@ -1,35 +1,24 @@
 import { Link } from 'react-router-dom';
 import { Order, OrderStatus } from '../types/order.types';
+import { formatTxHash, getSolanaExplorerUrl } from '../utils/solana.utils';
+import { getStatusColor, formatDate, formatOrderId, truncateText } from '../utils/order.utils';
 
 interface OrderCardProps {
   order: Order;
 }
 
 export function OrderCard({ order }: OrderCardProps) {
-  const getStatusColor = (status: OrderStatus) => {
-    switch (status) {
-      case OrderStatus.CONFIRMED:
-        return '#10b981';
-      case OrderStatus.FAILED:
-        return '#ef4444';
-      case OrderStatus.PENDING:
-      case OrderStatus.ROUTING:
-      case OrderStatus.BUILDING:
-      case OrderStatus.SUBMITTED:
-        return '#f59e0b';
-      default:
-        return '#6b7280';
-    }
-  };
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
+  const handleTxHashClick = (e: React.MouseEvent, txHash: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    window.open(getSolanaExplorerUrl(txHash), '_blank');
   };
 
   return (
     <Link to={`/orders/${order.orderId}`} className="order-card">
       <div className="order-card-header">
-        <span className="order-id">Order #{order.orderId.slice(0, 8)}</span>
+        <span className="order-id">Order #{formatOrderId(order.orderId)}</span>
         <span
           className="order-status"
           style={{ backgroundColor: getStatusColor(order.status) }}
@@ -48,6 +37,24 @@ export function OrderCard({ order }: OrderCardProps) {
         )}
         {order.executedPrice && (
           <div className="order-price">Price: {order.executedPrice}</div>
+        )}
+        {order.txHash && (
+          <div 
+            className="order-tx-hash"
+            onClick={(e) => handleTxHashClick(e, order.txHash!)}
+            title="View on Solana Explorer"
+          >
+            TX: {formatTxHash(order.txHash)}
+            <span className="external-link-icon">↗</span>
+          </div>
+        )}
+        {order.status === OrderStatus.FAILED && order.errorReason && (
+          <div className="order-error">
+            <span className="error-icon">⚠️</span>
+            <span className="error-message-text" title={order.errorReason}>
+              {truncateText(order.errorReason)}
+            </span>
+          </div>
         )}
         <div className="order-date">{formatDate(order.updatedAt)}</div>
       </div>

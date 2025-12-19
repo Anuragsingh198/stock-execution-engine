@@ -3,11 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { OrderRequest } from '../types/order.types';
 import { apiService } from '../services/api.service';
 import { DUMMY_STOCKS } from '../config/api.config';
+import { getNetworkDisplayName } from '../utils/solana.utils';
+import { useNotifications } from '../hooks/useNotifications';
+import { NotificationContainer } from './Notification';
 
 export function OrderForm() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { notifications, addNotification, removeNotification } = useNotifications();
   const [formData, setFormData] = useState<OrderRequest>({
     tokenIn: 'SOL',
     tokenOut: 'USDC',
@@ -24,14 +28,39 @@ export function OrderForm() {
     try {
       const response = await apiService.createOrder(formData);
       if (response.success && response.orderId) {
-        navigate(`/orders/${response.orderId}`);
+        addNotification(
+          'success',
+          'Order Created Successfully!',
+          `Order ${response.orderId} has been created and queued for execution`,
+          {
+            autoClose: true,
+            duration: 5000,
+          }
+        );
+        // Navigate after a short delay to show the notification
+        setTimeout(() => {
+          navigate(`/orders/${response.orderId}`);
+        }, 500);
       } else {
-        setError(response.error || 'Failed to create order');
+        const errorMsg = response.error || 'Failed to create order';
+        setError(errorMsg);
+        addNotification('error', 'Order Creation Failed', errorMsg, {
+          autoClose: false,
+        });
       }
     } catch (err: any) {
-      setError(err.error || 'Failed to create order');
+      const errorMsg = err.error || 'Failed to create order';
+      setError(errorMsg);
       if (err.details && err.details.length > 0) {
-        setError(err.details.map((d: any) => d.message).join(', '));
+        const detailsMsg = err.details.map((d: any) => d.message).join(', ');
+        setError(detailsMsg);
+        addNotification('error', 'Order Creation Failed', detailsMsg, {
+          autoClose: false,
+        });
+      } else {
+        addNotification('error', 'Order Creation Failed', errorMsg, {
+          autoClose: false,
+        });
       }
     } finally {
       setLoading(false);
@@ -40,7 +69,23 @@ export function OrderForm() {
 
   return (
     <div className="order-form">
-      <h2>Create New Order</h2>
+      <NotificationContainer
+        notifications={notifications}
+        onClose={removeNotification}
+      />
+      
+      <div className="form-header">
+        <h2>Create New Order</h2>
+        <div className="network-badge">
+          🌐 {getNetworkDisplayName()}
+        </div>
+      </div>
+      <div className="form-info">
+        <p className="info-text">
+          ⚠️ Orders will execute real swaps on Solana {getNetworkDisplayName()}. 
+          Ensure your wallet is funded before creating orders.
+        </p>
+      </div>
       <form onSubmit={handleSubmit}>
         <div className="form-group">
           <label htmlFor="tokenIn">Token In</label>
@@ -117,8 +162,15 @@ export function OrderForm() {
 
         {error && <div className="error-message">{error}</div>}
 
-        <button type="submit" disabled={loading} className="submit-button">
-          {loading ? 'Creating Order...' : 'Create Order'}
+        <button type="submit" disabled={loading} className={`submit-button ${loading ? 'loading' : ''}`}>
+          {loading ? (
+            <span className="button-content">
+              <span className="spinner"></span>
+              <span>Creating Order...</span>
+            </span>
+          ) : (
+            'Create Order'
+          )}
         </button>
       </form>
     </div>

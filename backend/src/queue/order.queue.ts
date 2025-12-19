@@ -27,7 +27,6 @@ export class OrderQueue {
     };
 
     this.queue = new Queue('order-execution', queueOptions);
-    console.log('Order queue initialized');
   }
 
   public static getInstance(): OrderQueue {
@@ -42,10 +41,9 @@ export class OrderQueue {
       'execute-order',
       { orderId },
       {
-        jobId: orderId, // Use orderId as jobId to prevent duplicates
+        jobId: orderId,
       }
     );
-    console.log(`[Order Queue] Added order ${orderId} to queue`);
   }
 
   public getQueue(): Queue {

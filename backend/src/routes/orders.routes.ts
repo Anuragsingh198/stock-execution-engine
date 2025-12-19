@@ -3,25 +3,19 @@ import { orderRequestSchema } from '../validators/order.validator';
 import { OrderService } from '../services/order.service';
 import { OrderQueue } from '../queue/order.queue';
 import { WebSocketManager } from '../utils/websocket.manager';
+import { OrderUpdate } from '../types/order.types';
+import { handleRouteError } from '../utils/error.util';
+import { normalizeDate } from '../utils/date.util';
 
 export async function registerOrderRoutes(fastify: FastifyInstance) {
   const orderService = new OrderService();
   const orderQueue = OrderQueue.getInstance();
   const wsManager = WebSocketManager.getInstance();
 
-  /**
-   * POST /api/orders/execute
-   * Accept order, create it, and push to queue
-   */
   fastify.post('/api/orders/execute', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      // Validate request
       const validatedData = orderRequestSchema.parse(request.body);
-      
-      // Create order with PENDING status
       const order = await orderService.createOrder(validatedData);
-      
-      // Add to queue for processing
       await orderQueue.addOrder(order.orderId);
       
       return reply.code(201).send({
@@ -31,27 +25,10 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
         message: 'Order created and queued for execution',
       });
     } catch (error: any) {
-      if (error.name === 'ZodError') {
-        return reply.code(400).send({
-          success: false,
-          error: 'Validation error',
-          details: error.errors,
-        });
-      }
-      
-      console.error('Error creating order:', error);
-      return reply.code(500).send({
-        success: false,
-        error: 'Internal server error',
-        message: error.message,
-      });
+      return handleRouteError(error, reply, 'Error creating order:');
     }
   });
 
-  /**
-   * GET /api/orders
-   * Get all orders
-   */
   fastify.get('/api/orders', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const query = request.query as { limit?: string; offset?: string };
@@ -66,19 +43,10 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
         count: orders.length,
       });
     } catch (error: any) {
-      console.error('Error fetching orders:', error);
-      return reply.code(500).send({
-        success: false,
-        error: 'Internal server error',
-        message: error.message,
-      });
+      return handleRouteError(error, reply, 'Error fetching orders:');
     }
   });
 
-  /**
-   * GET /api/orders/:orderId
-   * Get order status
-   */
   fastify.get('/api/orders/:orderId', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { orderId } = request.params as { orderId: string };
@@ -96,55 +64,44 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
         order,
       });
     } catch (error: any) {
-      console.error('Error fetching order:', error);
-      return reply.code(500).send({
-        success: false,
-        error: 'Internal server error',
-        message: error.message,
-      });
+      return handleRouteError(error, reply, 'Error fetching order:');
     }
   });
 
-  /**
-   * WebSocket endpoint for real-time order updates
-   * WS /api/orders/:orderId/stream
-   */
   fastify.get('/api/orders/:orderId/stream', { websocket: true }, async (connection, req) => {
     const { orderId } = req.params as { orderId: string };
     
-    console.log(`[WebSocket] New connection for orderId: ${orderId}`);
-    
-    // Register WebSocket connection
-    wsManager.register(orderId, connection.socket);
-    
-    // Send initial connection confirmation
     connection.socket.send(JSON.stringify({
       type: 'connected',
       orderId,
       timestamp: new Date().toISOString(),
     }));
 
-    // Send current order status immediately when WebSocket connects
-    try {
-      const order = await orderService.getOrder(orderId);
-      if (order) {
-        const initialUpdate = {
-          orderId: order.orderId,
-          status: order.status,
-          dexType: order.dexType,
-          executedPrice: order.executedPrice,
-          txHash: order.txHash,
-          errorReason: order.errorReason,
-          timestamp: order.updatedAt instanceof Date ? order.updatedAt.toISOString() : (typeof order.updatedAt === 'string' ? order.updatedAt : new Date().toISOString()),
-        };
-        connection.socket.send(JSON.stringify(initialUpdate));
-        console.log(`[WebSocket] Sent initial status for orderId: ${orderId}, status: ${order.status}`);
-      }
-    } catch (error) {
-      console.error(`[WebSocket] Error fetching initial order status for ${orderId}:`, error);
-    }
+    wsManager.register(orderId, connection.socket);
     
-    // Handle client messages (optional - for ping/pong)
+    setTimeout(async () => {
+      try {
+        const order = await orderService.getOrder(orderId);
+        if (order) {
+          const timestamp = normalizeDate(order.updatedAt);
+          
+          const initialUpdate: OrderUpdate = {
+            orderId: order.orderId,
+            status: order.status,
+            dexType: order.dexType,
+            executedPrice: order.executedPrice,
+            txHash: order.txHash,
+            errorReason: order.errorReason,
+            timestamp: timestamp,
+          };
+          
+          await wsManager.emit(orderId, initialUpdate);
+        }
+      } catch (error) {
+        console.error(`[WebSocket] Error fetching initial order status for ${orderId}:`, error);
+      }
+    }, 300);
+    
     connection.socket.on('message', (message: Buffer) => {
       try {
         const data = JSON.parse(message.toString());

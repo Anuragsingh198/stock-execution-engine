@@ -33,7 +33,6 @@ export class OrderModel {
 
     try {
       await this.db.query(createTableQuery);
-      console.log('Orders table initialized');
     } catch (error) {
       console.error('Error initializing orders table:', error);
     }
@@ -114,7 +113,7 @@ export class OrderModel {
     const query = `SELECT * FROM orders ORDER BY created_at DESC LIMIT $1 OFFSET $2`;
     const result = await this.db.query(query, [limit, offset]);
 
-    return result.rows.map((row) => this.mapRowToOrder(row));
+    return result.rows.map((row: any) => this.mapRowToOrder(row));
   }
 
   private mapRowToOrder(row: any): Order {

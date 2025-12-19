@@ -5,6 +5,10 @@ import { apiService } from '../services/api.service';
 import { WebSocketService } from '../services/websocket.service';
 import { SocketEventLog } from '../components/SocketEventLog';
 import { SocketMessage } from '../types/order.types';
+import { formatTxHash, getSolanaExplorerUrl, copyToClipboard, getNetworkDisplayName } from '../utils/solana.utils';
+import { getStatusColor, formatDate } from '../utils/order.utils';
+import { useNotifications } from '../hooks/useNotifications';
+import { NotificationContainer } from '../components/Notification';
 
 export function OrderStatus() {
   const { orderId } = useParams<{ orderId: string }>();
@@ -12,8 +16,8 @@ export function OrderStatus() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [socketEvents, setSocketEvents] = useState<Array<SocketMessage | OrderUpdate>>([]);
+  const { notifications, showStatusNotification, removeNotification } = useNotifications();
 
-  // Fetch order status
   const fetchOrder = useCallback(async () => {
     if (!orderId) return;
     try {
@@ -35,7 +39,6 @@ export function OrderStatus() {
 
     fetchOrder();
 
-    // Set up WebSocket connection
     const ws = new WebSocketService(orderId);
 
     ws.on('connected', (data) => {
@@ -43,10 +46,49 @@ export function OrderStatus() {
     });
 
     ws.on('update', (update: OrderUpdate) => {
-      setSocketEvents((prev) => [...prev, update]);
-      // Update order state when status changes
+      // Show notification for status update
+      showStatusNotification(update.status, update.txHash, update.errorReason);
+
+      setSocketEvents((prev) => {
+        if (update.status === OrderStatusEnum.FAILED) {
+          const filtered = prev.filter(
+            (event) => !('status' in event && event.status === OrderStatusEnum.FAILED)
+          );
+          return [...filtered, update];
+        }
+        
+        const isDuplicate = prev.some(
+          (event) => 
+            'status' in event && 
+            event.status === update.status && 
+            'orderId' in event && 
+            event.orderId === update.orderId &&
+            'timestamp' in event &&
+            event.timestamp === update.timestamp
+        );
+        if (isDuplicate) {
+          return prev;
+        }
+        return [...prev, update];
+      });
       setOrder((prevOrder) => {
-        if (!prevOrder) return prevOrder;
+        if (!prevOrder) {
+          return {
+            orderId: update.orderId,
+            tokenIn: '',
+            tokenOut: '',
+            amountIn: '',
+            slippageTolerance: 0,
+            status: update.status,
+            dexType: update.dexType,
+            executedPrice: update.executedPrice,
+            txHash: update.txHash,
+            errorReason: update.errorReason,
+            createdAt: update.timestamp,
+            updatedAt: update.timestamp,
+          } as Order;
+        }
+        
         return {
           ...prevOrder,
           status: update.status,
@@ -64,14 +106,12 @@ export function OrderStatus() {
     });
 
     ws.on('closed', () => {
-      console.log('WebSocket closed');
     });
 
     ws.connect().catch((err) => {
       console.error('Failed to connect WebSocket:', err);
     });
 
-    // Poll for order updates every 5 seconds as fallback
     const pollInterval = setInterval(() => {
       fetchOrder();
     }, 5000);
@@ -81,26 +121,6 @@ export function OrderStatus() {
       clearInterval(pollInterval);
     };
   }, [orderId, fetchOrder]);
-
-  const getStatusColor = (status: OrderStatusEnum) => {
-    switch (status) {
-      case OrderStatusEnum.CONFIRMED:
-        return '#10b981';
-      case OrderStatusEnum.FAILED:
-        return '#ef4444';
-      case OrderStatusEnum.PENDING:
-      case OrderStatusEnum.ROUTING:
-      case OrderStatusEnum.BUILDING:
-      case OrderStatusEnum.SUBMITTED:
-        return '#f59e0b';
-      default:
-        return '#6b7280';
-    }
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
-  };
 
   if (loading) {
     return (
@@ -123,10 +143,32 @@ export function OrderStatus() {
 
   return (
     <div className="order-status-page">
+      <NotificationContainer
+        notifications={notifications}
+        onClose={removeNotification}
+      />
+      
       <div className="order-status-header">
         <Link to="/orders" className="back-link">← Back to Orders</Link>
-        <h1>Order Status</h1>
+        <div className="header-right">
+          <h1>Order Status</h1>
+          <div className="network-badge">
+            🌐 {getNetworkDisplayName()}
+          </div>
+        </div>
       </div>
+
+      {order.status === OrderStatusEnum.FAILED && order.errorReason && (
+        <div className="failed-order-banner">
+          <div className="failed-banner-content">
+            <span className="failed-icon">❌</span>
+            <div className="failed-banner-text">
+              <strong>Order Failed</strong>
+              <p>{order.errorReason}</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="order-status-content">
         <div className="order-details">
@@ -166,13 +208,49 @@ export function OrderStatus() {
             {order.txHash && (
               <div className="detail-row">
                 <span className="detail-label">Transaction Hash:</span>
-                <span className="detail-value tx-hash">{order.txHash}</span>
+                <div className="detail-value tx-hash-container">
+                  <span className="tx-hash">{formatTxHash(order.txHash, 12)}</span>
+                  <div className="tx-hash-actions">
+                    <button
+                      className="tx-action-button"
+                      onClick={() => copyToClipboard(order.txHash!)}
+                      title="Copy transaction hash"
+                    >
+                      📋 Copy
+                    </button>
+                    <a
+                      href={getSolanaExplorerUrl(order.txHash)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="tx-action-button"
+                      title="View on Solana Explorer"
+                    >
+                      🔗 View on Explorer
+                    </a>
+                  </div>
+                </div>
               </div>
             )}
             {order.errorReason && (
-              <div className="detail-row">
-                <span className="detail-label">Error:</span>
-                <span className="detail-value error-text">{order.errorReason}</span>
+              <div className="detail-row error-row">
+                <span className="detail-label">Error Reason:</span>
+                <div className="detail-value error-container">
+                  <div className="error-display">
+                    <span className="error-icon-large">⚠️</span>
+                    <span className="error-text">{order.errorReason}</span>
+                  </div>
+                  {order.status === OrderStatusEnum.FAILED && (
+                    <div className="error-actions">
+                      <button
+                        className="retry-button"
+                        onClick={() => window.location.reload()}
+                        title="Refresh to check if issue is resolved"
+                      >
+                        🔄 Refresh
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             <div className="detail-row">

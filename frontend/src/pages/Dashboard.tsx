@@ -4,6 +4,7 @@ import { StockList } from '../components/StockList';
 import { OrderCard } from '../components/OrderCard';
 import { apiService } from '../services/api.service';
 import { Order } from '../types/order.types';
+import { getNetworkDisplayName } from '../utils/solana.utils';
 
 export function Dashboard() {
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
@@ -29,7 +30,12 @@ export function Dashboard() {
   return (
     <div className="dashboard">
       <div className="dashboard-header">
-        <h1>Stock Trading Platform</h1>
+        <div>
+          <h1>Stock Trading Platform</h1>
+          <div className="network-badge" style={{ marginTop: '0.5rem' }}>
+            🌐 Connected to {getNetworkDisplayName()}
+          </div>
+        </div>
         <Link to="/orders/create" className="create-order-button">
           Create New Order
         </Link>
