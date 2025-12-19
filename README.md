@@ -15,6 +15,7 @@ A production-grade backend Order Execution Engine that processes MARKET orders w
 - [DEX Routing](#dex-routing)
 - [Testing](#testing)
 - [Extending to Other Order Types](#extending-to-other-order-types)
+- [AWS Deployment](#aws-deployment)
 
 ## Architecture
 
@@ -590,6 +591,169 @@ export interface SniperOrderRequest extends OrderRequest {
 - **Throughput**: 
   - Order execution: 100 orders/minute
   - WebSocket delivery: 6000 events/minute (6 workers × 1000 events/min)
+
+## AWS Deployment
+
+Deploy to AWS EC2 using Docker Compose - a simple and cost-effective method that runs both backend and frontend on a single EC2 instance.
+
+### Prerequisites
+
+- AWS EC2 instance (Ubuntu 22.04, t3.medium or larger)
+- Security groups: Allow HTTP (port 80), SSH (port 22)
+- Managed PostgreSQL database (Neon, Supabase, or AWS RDS)
+- Managed Redis instance (Upstash or AWS ElastiCache)
+
+### Quick Deployment
+
+#### 1. Launch EC2 Instance
+- Choose Ubuntu 22.04 LTS AMI
+- Configure security group (ports 80, 22)
+- Launch and download key pair
+
+#### 2. Setup Docker on EC2
+
+```bash
+# Connect via SSH
+ssh -i your-key.pem ubuntu@your-ec2-ip
+
+# Install Docker
+sudo apt update
+sudo apt install docker.io docker-compose-plugin -y
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker $USER
+# Log out and back in
+```
+
+#### 3. Clone and Configure
+
+```bash
+# Clone project
+git clone https://github.com/your-username/stockproject.git
+cd stockproject
+
+# Configure environment
+cp .env.example .env
+nano .env  # Add DATABASE_URL and REDIS_URL
+```
+
+#### 4. Deploy
+
+```bash
+# Build and start containers
+docker-compose up -d --build
+
+# Verify deployment
+curl http://localhost:3000/health
+docker-compose ps
+```
+
+Access your application at: `http://your-ec2-public-ip`
+
+### Common Commands
+
+```bash
+# Start/Stop
+docker-compose up -d
+docker-compose down
+docker-compose restart
+
+# Update
+git pull && docker-compose up -d --build
+
+# Logs
+docker-compose logs -f
+docker-compose logs -f backend
+```
+
+### Optional: Domain & SSL
+
+- **Elastic IP**: Allocate and associate with instance
+- **DNS**: Point domain A record to Elastic IP
+- **SSL**: Use Let's Encrypt with Certbot for HTTPS
+
+### Application Screenshots
+
+#### Dashboard View
+![Dashboard](documets/dahsboard.png)
+
+#### Orders List
+![All Orders](documets/allordres.png)
+
+#### Dashboard with Orders
+![Dashboard Orders](documets/dashboardorders.png)
+
+#### Order Creation Form
+![Order Form](documets/orderform.png)
+
+#### Order Response Examples
+![Response 1](documets/reponseform1.png)
+![Response 2](documets/response2.png)
+![Response 4](documets/reponse4.png)
+![Response 5](documets/reponse5.png)
+
+### Demo Video
+
+Watch the full application demo:
+
+<iframe src="https://drive.google.com/file/d/1lPQuR74OeLIG2MJoCFNfZxGFBkVTwxS_/preview" width="640" height="480" allow="autoplay" allowfullscreen></iframe>
+
+**Direct Link**: [View on Google Drive](https://drive.google.com/file/d/1lPQuR74OeLIG2MJoCFNfZxGFBkVTwxS_/view?usp=drive_link)
+
+The demo showcases:
+- Order creation workflow
+- Real-time order status updates via WebSocket
+- Order history and filtering
+- Dashboard with recent orders
+- Complete order lifecycle from creation to confirmation
+
+
+### Environment Variables
+
+Required environment variables for production:
+
+```env
+# Backend
+NODE_ENV=production
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+REDIS_URL=redis://host:6379
+PORT=3000
+HOST=0.0.0.0
+
+# Queue Configuration
+QUEUE_MAX_CONCURRENCY=10
+QUEUE_RATE_LIMIT_PER_MINUTE=100
+
+# WebSocket Worker Configuration
+WS_WORKER_CONCURRENCY=50
+WS_WORKER_RATE_LIMIT=1000
+
+# Frontend
+VITE_API_BASE_URL=https://your-backend-url
+VITE_WS_BASE_URL=wss://your-backend-url
+```
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **Connection Timeouts**: Ensure security groups allow traffic on required ports
+2. **Database Connection**: Verify DATABASE_URL is correct and database is accessible
+3. **Redis Connection**: Check REDIS_URL and network connectivity
+4. **CORS Issues**: Ensure frontend URL is whitelisted in backend CORS settings
+5. **WebSocket Issues**: Verify WebSocket upgrade is supported (App Runner supports this)
+
+#### Health Checks
+
+- Backend: `GET https://your-backend-url/health`
+- Should return: `{"status":"ok","timestamp":"..."}`
+
+### Cost Optimization
+
+- Use App Runner's auto-scaling to minimize costs during low traffic
+- Consider reserved capacity for predictable workloads
+- Monitor CloudWatch metrics to optimize resource allocation
+- Use managed database and Redis services for better cost efficiency
 
 ## License
 
