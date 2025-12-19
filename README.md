@@ -6,9 +6,9 @@ A production-grade backend Order Execution Engine that processes MARKET orders w
 
 ## Demo Video
 
-Watch the full application demo:
+click to Watch the full application demo:
+[![Demo Video](documets/dahsboard.png)](https://drive.google.com/file/d/1lPQuR74OeLIG2MJoCFNfZxGFBkVTwxS_/view)
 
-<video ttps://drive.google.com/file/d/1lPQuR74OeLIG2MJoCFNfZxGFBkVTwxS_/preview" width="640" height="480" allow="autoplay" allowfullscreen></video>
 
 **Direct Link**: [View on Google Drive](https://drive.google.com/file/d/1lPQuR74OeLIG2MJoCFNfZxGFBkVTwxS_/view?usp=drive_link)
 
