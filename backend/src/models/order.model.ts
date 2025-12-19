@@ -46,7 +46,7 @@ export class OrderModel {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     `;
 
-    await this.db.query(query, [
+    const result = await this.db.query(query, [
       order.orderId,
       order.tokenIn,
       order.tokenOut,
@@ -57,6 +57,11 @@ export class OrderModel {
       order.createdAt,
       order.updatedAt,
     ]);
+    
+    // Verify the insert was successful
+    if (result.rowCount !== 1) {
+      throw new Error(`Failed to create order: expected 1 row inserted, got ${result.rowCount}`);
+    }
   }
 
   public async updateStatus(

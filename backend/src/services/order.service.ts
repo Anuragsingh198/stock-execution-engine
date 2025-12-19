@@ -39,6 +39,10 @@ export class OrderService {
 
     await this.orderModel.create(order);
     await this.updateOrderStatus(orderId, OrderStatus.PENDING);
+    
+    // Small delay to ensure database transaction is committed
+    // This is especially important in Docker environments with network latency
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     return order;
   }

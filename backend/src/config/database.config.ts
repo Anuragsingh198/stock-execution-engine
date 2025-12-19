@@ -12,7 +12,9 @@ export class Database {
         connectionString: databaseUrl,
         max: 20,
         idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 2000,
+        connectionTimeoutMillis: 10000, // Increased for Docker/network latency
+        statement_timeout: 30000, // 30 seconds for queries
+        query_timeout: 30000,
       };
 
     this.pool = new Pool(config);

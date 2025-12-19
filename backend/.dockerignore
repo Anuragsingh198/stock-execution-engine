@@ -1,0 +1,17 @@
+node_modules
+dist
+.env
+*.log
+.git
+.gitignore
+.ebextensions
+README.md
+*.md
+__tests__
+.coverage
+.nyc_output
+.vscode
+.idea
+*.swp
+*.swo
+*~

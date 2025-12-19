@@ -1,8 +1,29 @@
 import { Order, OrderStatus, DexType } from '../types/order.types';
 
+// Use relative URL if VITE_API_BASE_URL is empty (for Docker deployment with nginx proxy)
+// Otherwise use the provided URL (for local development)
+const getBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL;
+  if (!envUrl || envUrl === '') {
+    return ''; // Relative URL - nginx will proxy to backend
+  }
+  return envUrl;
+};
+
+// WebSocket URL - use direct backend connection (port 3000) or provided URL
+const getWsUrl = () => {
+  const envUrl = import.meta.env.VITE_WS_BASE_URL;
+  if (envUrl) {
+    return envUrl;
+  }
+  // Default: connect directly to backend on port 3000
+  // This works because backend exposes port 3000 to host
+  return 'ws://localhost:3000';
+};
+
 export const API_CONFIG = {
-  BASE_URL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000',
-  WS_BASE_URL: import.meta.env.VITE_WS_BASE_URL || 'ws://localhost:3000',
+  BASE_URL: getBaseUrl(),
+  WS_BASE_URL: getWsUrl(),
 };
 
 export const DUMMY_STOCKS = [

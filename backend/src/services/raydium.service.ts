@@ -1,16 +1,13 @@
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { DexQuote, DexType, OrderRequest } from '../types/order.types';
-import { SolanaConfig } from '../config/solana.config';
 import { getTokenMint, parseTokenAmount } from '../utils/token.utils';
 import { calculateConstantProductQuote } from '../utils/quote.util';
 
 type ApiV2PoolInfoItem = any;
 
 export class RaydiumService {
-  private _solanaConfig: SolanaConfig;
-
   constructor() {
-    this._solanaConfig = SolanaConfig.getInstance();
+    // SolanaConfig can be accessed via SolanaConfig.getInstance() when needed
   }
 
   public async getQuote(orderRequest: OrderRequest): Promise<DexQuote> {

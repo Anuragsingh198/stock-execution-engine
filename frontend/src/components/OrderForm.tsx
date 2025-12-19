@@ -38,8 +38,11 @@ export function OrderForm() {
           }
         );
         // Navigate after a short delay to show the notification
+        // Pass order data in state to avoid immediate fetch race condition
         setTimeout(() => {
-          navigate(`/orders/${response.orderId}`);
+          navigate(`/orders/${response.orderId}`, {
+            state: response.order ? { order: response.order } : undefined,
+          });
         }, 500);
       } else {
         const errorMsg = response.error || 'Failed to create order';

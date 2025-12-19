@@ -10,8 +10,12 @@ export class RedisClient {
       if (!process.env.REDIS_URL) {
         throw new Error("REDIS_URL is not defined");
       }
-      RedisClient.instance = new Redis(process.env.REDIS_URL, {
-        tls: {},                    
+      // Upstash Redis URLs start with 'rediss://' (SSL) or 'redis://' (no SSL)
+      const redisUrl = process.env.REDIS_URL;
+      const isSSL = redisUrl?.startsWith('rediss://');
+      
+      RedisClient.instance = new Redis(redisUrl, {
+        tls: isSSL ? {} : undefined,  // Only enable TLS if using rediss://
         maxRetriesPerRequest: null,   
         enableOfflineQueue: true,     
         enableReadyCheck: true,

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useLocation } from 'react-router-dom';
 import { Order, OrderStatus as OrderStatusEnum, OrderUpdate } from '../types/order.types';
 import { apiService } from '../services/api.service';
 import { WebSocketService } from '../services/websocket.service';
@@ -12,8 +12,11 @@ import { NotificationContainer } from '../components/Notification';
 
 export function OrderStatus() {
   const { orderId } = useParams<{ orderId: string }>();
-  const [order, setOrder] = useState<Order | null>(null);
-  const [loading, setLoading] = useState(true);
+  const location = useLocation();
+  const [order, setOrder] = useState<Order | null>(
+    location.state?.order || null
+  );
+  const [loading, setLoading] = useState(!location.state?.order);
   const [error, setError] = useState<string | null>(null);
   const [socketEvents, setSocketEvents] = useState<Array<SocketMessage | OrderUpdate>>([]);
   const { notifications, showStatusNotification, removeNotification } = useNotifications();
@@ -24,6 +27,7 @@ export function OrderStatus() {
       const response = await apiService.getOrder(orderId);
       if (response.success && response.order) {
         setOrder(response.order);
+        setError(null);
       } else {
         setError(response.error || 'Order not found');
       }
@@ -37,7 +41,13 @@ export function OrderStatus() {
   useEffect(() => {
     if (!orderId) return;
 
-    fetchOrder();
+    // If we have order from navigation state, still fetch to get latest status
+    // but don't show loading state
+    if (location.state?.order) {
+      fetchOrder();
+    } else {
+      fetchOrder();
+    }
 
     const ws = new WebSocketService(orderId);
 
