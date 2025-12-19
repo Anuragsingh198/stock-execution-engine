@@ -20,7 +20,7 @@ A production-grade backend Order Execution Engine that processes MARKET orders w
 
 ### High-Level Overview
 
-The Order Execution Engine follows a **microservices-inspired architecture** with clear separation of concerns:
+The Order Execution Engine follows an **event-driven architecture** with status-specific queues for reliable WebSocket delivery:
 
 ```
 ┌─────────────┐
@@ -39,7 +39,7 @@ The Order Execution Engine follows a **microservices-inspired architecture** wit
        │ Queue Job
        │
 ┌──────▼─────────────────────────────────────┐
-│         BullMQ Queue                       │
+│         Order Queue (BullMQ)                │
 │  - Max Concurrency: 10                     │
 │  - Rate Limit: 100 orders/min              │
 │  - Retry: 3 attempts (exponential backoff) │
@@ -51,7 +51,7 @@ The Order Execution Engine follows a **microservices-inspired architecture** wit
 │         Order Worker                       │
 │  - Fetches order from queue                │
 │  - Executes order lifecycle                │
-│  - Emits WebSocket updates                 │
+│  - Publishes events to status queues       │
 └──────┬─────────────────────────────────────┘
        │
        ├─────────────────────────────────────┐
@@ -62,11 +62,47 @@ The Order Execution Engine follows a **microservices-inspired architecture** wit
 │  - Status mgmt  │              │   - Meteora         │
 └──────┬──────────┘              └─────────────────────┘
        │
+       │ Publishes events
+       │
+┌──────▼─────────────────────────────────────┐
+│      Event Publisher Service               │
+│  ┌──────────────────────────────────────┐  │
+│  │ Status-Specific Queues (BullMQ)      │  │
+│  │  • pending   (Priority: 5)          │  │
+│  │  • routing   (Priority: 6)          │  │
+│  │  • building  (Priority: 7)          │  │
+│  │  • submitted (Priority: 8)          │  │
+│  │  • confirmed (Priority: 9)          │  │
+│  │  • failed    (Priority: 10)         │  │
+│  └──────────────────────────────────────┘  │
+└──────┬─────────────────────────────────────┘
+       │
+       │ Workers subscribe
+       │
+┌──────▼─────────────────────────────────────┐
+│      WebSocket Worker Service              │
+│  ┌──────────────────────────────────────┐  │
+│  │ 6 Workers (one per status queue)     │  │
+│  │  • Parallel processing (50 default)   │  │
+│  │  • Rate limit: 1000 events/min        │  │
+│  │  • Automatic retries                  │  │
+│  └──────────────────────────────────────┘  │
+└──────┬─────────────────────────────────────┘
+       │
+       │ Emits to all connections
+       │
+┌──────▼─────────────────────────────────────┐
+│      WebSocket Manager                     │
+│  • Multiple connections per orderId        │
+│  • Parallel emission                       │
+│  • Connection management                   │
+└──────┬─────────────────────────────────────┘
+       │
        ├─────────────────────────────────────┐
        │                                     │
 ┌──────▼──────────┐              ┌──────────▼──────────┐
-│  Order Model    │              │ WebSocket Manager   │
-│  (PostgreSQL)   │              │ (Real-time updates) │
+│  Order Model    │              │   Clients            │
+│  (PostgreSQL)   │              │   (Real-time updates)│
 └─────────────────┘              └─────────────────────┘
 ```
 
@@ -77,22 +113,30 @@ The Order Execution Engine follows a **microservices-inspired architecture** wit
    - Validates input using Zod schemas
    - Manages WebSocket connections
 
-2. **Queue System** (`src/queue/`, `src/workers/`)
-   - BullMQ for job queuing and processing
-   - Worker processes orders with controlled concurrency
-   - Rate limiting and retry logic
+2. **Order Queue System** (`src/queue/`, `src/workers/order.worker.ts`)
+   - BullMQ for order execution queuing
+   - Order worker processes orders with controlled concurrency
+   - Rate limiting and retry logic for order execution
 
-3. **Business Logic** (`src/services/`)
-   - `OrderService`: Manages order lifecycle
+3. **Event-Driven System** (`src/services/event.publisher.ts`, `src/workers/websocket.worker.ts`)
+   - **Event Publisher**: Publishes status updates to status-specific queues
+   - **WebSocket Workers**: 6 workers (one per status) process events in parallel
+   - Status-specific queues enable parallel processing and priority-based delivery
+   - Events persisted in Redis (survive server restarts)
+
+4. **Business Logic** (`src/services/`)
+   - `OrderService`: Manages order lifecycle, publishes events (non-blocking)
    - `DexRouterService`: Queries multiple DEXs and selects best route
+   - `EventPublisher`: Publishes order status updates to queues
 
-4. **Data Layer** (`src/models/`, `src/config/`)
+5. **Data Layer** (`src/models/`, `src/config/`)
    - PostgreSQL for persistent order storage
-   - Redis for queue management and WebSocket mapping
+   - Redis for queue management (order queue + 6 status queues)
 
-5. **Real-time Updates** (`src/utils/`)
-   - WebSocket manager maps orderId → WebSocket connections
-   - Emits status updates at each lifecycle stage
+6. **Real-time Updates** (`src/utils/websocket.manager.ts`)
+   - WebSocket manager supports multiple connections per orderId
+   - Parallel emission to all connections
+   - Automatic cleanup of dead connections
 
 ## Design Decisions
 
@@ -150,19 +194,25 @@ order-execution-engine/
 │   │
 │   ├── services/            # Business logic
 │   │   ├── order.service.ts      # Order lifecycle management
-│   │   └── dex.router.service.ts # DEX routing logic
+│   │   ├── dex.router.service.ts # DEX routing logic
+│   │   └── event.publisher.ts    # Event publisher (status-specific queues)
 │   │
 │   ├── queue/               # Queue configuration
-│   │   └── order.queue.ts        # BullMQ queue setup
+│   │   └── order.queue.ts        # BullMQ queue setup for orders
 │   │
 │   ├── workers/             # Queue workers
-│   │   └── order.worker.ts       # Order processing worker
+│   │   ├── order.worker.ts       # Order processing worker
+│   │   └── websocket.worker.ts   # WebSocket event delivery worker (6 workers)
 │   │
 │   ├── routes/              # API routes
 │   │   └── orders.routes.ts      # HTTP & WebSocket endpoints
 │   │
 │   ├── utils/               # Utilities
-│   │   └── websocket.manager.ts  # WebSocket connection manager
+│   │   ├── websocket.manager.ts  # WebSocket connection manager (multiple connections)
+│   │   ├── date.util.ts          # Date utilities
+│   │   ├── error.util.ts         # Error utilities
+│   │   ├── quote.util.ts         # Quote calculation utilities
+│   │   └── token.utils.ts         # Token utilities
 │   │
 │   ├── types/               # TypeScript types
 │   │   └── order.types.ts        # Order interfaces & enums
@@ -193,28 +243,40 @@ order-execution-engine/
 
 - **Input Validation**: Zod schemas ensure data integrity
 - **Async Processing**: Orders queued immediately, processed asynchronously
-- **Status Tracking**: Real-time updates via WebSocket
+- **Status Tracking**: Real-time updates via WebSocket (event-driven)
 - **Error Handling**: Retry logic with exponential backoff
 
-### 2. DEX Routing
+### 2. Event-Driven Architecture
+
+- **Status-Specific Queues**: Separate BullMQ queue for each order status (pending, routing, building, submitted, confirmed, failed)
+- **Event Publisher**: Non-blocking event publishing from order execution
+- **WebSocket Workers**: 6 dedicated workers (one per status) process events in parallel
+- **Priority-Based Processing**: Critical events (failed/confirmed) have higher priority
+- **Event Persistence**: Events stored in Redis, survive server restarts
+- **High Concurrency**: 50 parallel events per worker (configurable)
+
+### 3. DEX Routing
 
 - **Parallel Queries**: Raydium and Meteora quotes fetched simultaneously
 - **Best Price Selection**: Chooses DEX with highest effective price (after fees)
 - **Realistic Simulation**: Network latency (200ms), price variance (2-5%)
 - **Fee Calculation**: Each DEX has realistic trading fees
 
-### 3. Real-time Updates
+### 4. Real-time Updates
 
 - **WebSocket Connections**: Upgraded from same HTTP connection
-- **Lifecycle Events**: All status changes streamed to client
-- **Connection Management**: Automatic cleanup on disconnect
+- **Multiple Connections**: Supports multiple clients per orderId (multiple browser tabs)
+- **Parallel Emission**: Events sent to all connections simultaneously
+- **Lifecycle Events**: All status changes streamed to clients via event-driven system
+- **Connection Management**: Automatic cleanup of dead connections
 
-### 4. Production Features
+### 5. Production Features
 
-- **Rate Limiting**: 100 orders per minute
-- **Concurrency Control**: Max 10 concurrent order executions
-- **Retry Strategy**: 3 attempts with exponential backoff
+- **Rate Limiting**: 100 orders per minute (order execution), 1000 events per minute per worker (WebSocket delivery)
+- **Concurrency Control**: Max 10 concurrent order executions, 50 concurrent WebSocket events per worker
+- **Retry Strategy**: 3 attempts with exponential backoff for both orders and events
 - **Graceful Shutdown**: Clean resource cleanup on SIGTERM/SIGINT
+- **Horizontal Scalability**: Can scale workers independently
 
 ## Getting Started
 
@@ -235,6 +297,24 @@ npm install
 ```bash
 cp .env.example .env
 # Edit .env with your database and Redis credentials
+```
+
+Required environment variables:
+```env
+# Database
+DATABASE_URL=postgresql://user:password@localhost:5432/order_execution_db
+
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# Order Queue Configuration
+QUEUE_MAX_CONCURRENCY=10
+QUEUE_RATE_LIMIT_PER_MINUTE=100
+
+# WebSocket Worker Configuration
+WS_WORKER_CONCURRENCY=50          # Parallel events per worker
+WS_WORKER_RATE_LIMIT=1000         # Events per minute per worker
 ```
 
 3. **Set up PostgreSQL database**:
@@ -344,8 +424,18 @@ Each order progresses through the following stages:
 
 All status changes are:
 - Persisted to PostgreSQL
-- Emitted via WebSocket to connected clients
+- Published to status-specific queue via Event Publisher (non-blocking)
+- Processed by WebSocket workers in parallel
+- Emitted via WebSocket to all connected clients (multiple connections supported)
 - Logged to console
+
+### Event-Driven Flow
+
+1. **Order Service** updates status and publishes event to Event Publisher
+2. **Event Publisher** adds event to appropriate status queue (Redis/BullMQ)
+3. **WebSocket Worker** (one of 6 workers) picks up event from queue
+4. **WebSocket Manager** emits event to all connections for that orderId in parallel
+5. **Clients** receive real-time updates via WebSocket
 
 ## DEX Routing
 
@@ -383,13 +473,15 @@ npm run test:coverage
 The test suite includes:
 
 1. **DEX Router Tests**: Quote calculation, best route selection
-2. **Order Service Tests**: Order creation, lifecycle management
-3. **WebSocket Manager Tests**: Connection management, message emission
-4. **Queue Tests**: Job addition, retry logic
-5. **Validation Tests**: Input validation edge cases
-6. **Model Tests**: Database operations
-7. **Integration Tests**: Full order lifecycle, WebSocket events
-8. **Route Tests**: HTTP endpoint behavior
+2. **Order Service Tests**: Order creation, lifecycle management, event publishing
+3. **Event Publisher Tests**: Status-specific queue publishing, priority handling
+4. **WebSocket Worker Tests**: Event processing, parallel delivery
+5. **WebSocket Manager Tests**: Multiple connection management, parallel emission
+6. **Queue Tests**: Job addition, retry logic (order queue + status queues)
+7. **Validation Tests**: Input validation edge cases
+8. **Model Tests**: Database operations
+9. **Integration Tests**: Full order lifecycle, event-driven WebSocket delivery
+10. **Route Tests**: HTTP endpoint behavior
 
 ## Extending to Other Order Types
 
@@ -468,10 +560,14 @@ export interface SniperOrderRequest extends OrderRequest {
 
 ### Scaling
 
-- Horizontal scaling: Multiple worker instances
-- Database connection pooling (already implemented)
-- Redis cluster for high availability
-- Load balancer for HTTP/WebSocket connections
+- **Horizontal Scaling**: 
+  - Multiple order worker instances
+  - Multiple WebSocket worker instances (can scale per status queue)
+  - Independent scaling of order execution vs WebSocket delivery
+- **Database**: Connection pooling (already implemented)
+- **Redis**: Cluster for high availability (handles order queue + 6 status queues)
+- **Load Balancing**: Load balancer for HTTP/WebSocket connections
+- **Event Processing**: High concurrency (50 events/worker) prevents bottlenecks
 
 ### Security
 
@@ -482,10 +578,18 @@ export interface SniperOrderRequest extends OrderRequest {
 
 ### Performance
 
-- Database indexing (already implemented)
-- Redis caching for frequently accessed orders
-- Connection pooling (already implemented)
-- Async processing (already implemented)
+- **Database**: Indexing (already implemented)
+- **Redis**: Caching for frequently accessed orders, queue persistence
+- **Connection Pooling**: Database and Redis (already implemented)
+- **Async Processing**: Order execution and WebSocket delivery (already implemented)
+- **Parallel Processing**: 
+  - 6 WebSocket workers process events in parallel
+  - 50 concurrent events per worker (configurable)
+  - Multiple connections per order supported
+- **Event-Driven**: Non-blocking event publishing, doesn't slow down order execution
+- **Throughput**: 
+  - Order execution: 100 orders/minute
+  - WebSocket delivery: 6000 events/minute (6 workers × 1000 events/min)
 
 ## License
 
