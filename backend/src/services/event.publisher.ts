@@ -1,22 +1,14 @@
 import { Queue, QueueOptions } from 'bullmq';
-import { RedisClient } from '../config/redis.config';
 import { OrderStatus, OrderUpdate } from '../types/order.types';
+import { OrderRedisManager } from './order.redis.manager';
 
-/**
- * Event Publisher Service
- * 
- * Publishes order status updates to status-specific queues for reliable,
- * event-driven WebSocket delivery. Each order status has its own queue
- * to enable parallel processing and better scalability.
- */
 export class EventPublisher {
   private static instance: EventPublisher;
-  private queues: Map<OrderStatus, Queue> = new Map();
-  private redisClient: ReturnType<typeof RedisClient.getInstance>;
+  private orderQueues: Map<string, Map<OrderStatus, Queue>> = new Map();
+  private orderRedisManager: OrderRedisManager;
 
   private constructor() {
-    this.redisClient = RedisClient.getInstance();
-    this.initializeQueues();
+    this.orderRedisManager = OrderRedisManager.getInstance();
   }
 
   public static getInstance(): EventPublisher {
@@ -26,10 +18,21 @@ export class EventPublisher {
     return EventPublisher.instance;
   }
 
-  /**
-   * Initialize separate queues for each order status
-   */
-  private initializeQueues(): void {
+  private async getOrderQueues(orderId: string): Promise<Map<OrderStatus, Queue>> {
+    if (this.orderQueues.has(orderId)) {
+      return this.orderQueues.get(orderId)!;
+    }
+
+    if (!this.orderRedisManager.isOrderConnectionActive(orderId)) {
+      console.log(`[EventPublisher] Redis connection not active for order ${orderId}, skipping event publication`);
+      throw new Error(`Redis connection not available for order ${orderId}`);
+    }
+
+    const redis = this.orderRedisManager.getOrderConnection(orderId);
+    if (!redis) {
+      throw new Error(`No Redis connection available for order ${orderId}`);
+    }
+
     const statuses: OrderStatus[] = [
       OrderStatus.PENDING,
       OrderStatus.ROUTING,
@@ -40,7 +43,7 @@ export class EventPublisher {
     ];
 
     const queueOptions: QueueOptions = {
-      connection: this.redisClient,
+      connection: redis,
       defaultJobOptions: {
         attempts: 3,
         backoff: {
@@ -48,40 +51,39 @@ export class EventPublisher {
           delay: 1000,
         },
         removeOnComplete: {
-          age: 3600, // Keep completed jobs for 1 hour
+          age: 3600,
           count: 1000,
         },
         removeOnFail: {
-          age: 86400, // Keep failed jobs for 24 hours
+          age: 86400,
         },
       },
     };
 
+    const orderQueues = new Map<OrderStatus, Queue>();
+
     statuses.forEach((status) => {
       const queueName = `order-status-${status}`;
       const queue = new Queue(queueName, queueOptions);
-      this.queues.set(status, queue);
+      orderQueues.set(status, queue);
     });
+
+    this.orderQueues.set(orderId, orderQueues);
+    return orderQueues;
   }
 
-  /**
-   * Publish an order status update to the appropriate status queue
-   * 
-   * @param update - Order update event
-   * @returns Promise that resolves when the event is published
-   */
   public async publishStatusUpdate(update: OrderUpdate): Promise<void> {
-    const queue = this.queues.get(update.status);
-    if (!queue) {
-      console.error(`[EventPublisher] No queue found for status: ${update.status}`);
-      return;
-    }
-
     try {
-      // Use orderId as jobId to prevent duplicate events
-      // Add timestamp to jobId to allow multiple events with same status
+      const orderQueues = await this.getOrderQueues(update.orderId);
+      const queue = orderQueues.get(update.status);
+
+      if (!queue) {
+        console.error(`[EventPublisher] No queue found for status: ${update.status} and order: ${update.orderId}`);
+        return;
+      }
+
       const jobId = `${update.orderId}-${update.status}-${Date.now()}`;
-      
+
       await queue.add(
         'status-update',
         {
@@ -100,50 +102,59 @@ export class EventPublisher {
       );
 
       console.log(`[EventPublisher] Published ${update.status} event for order ${update.orderId}`);
+
+      this.orderRedisManager.resetTimeout(update.orderId);
     } catch (error: any) {
-      console.error(`[EventPublisher] Failed to publish status update:`, error);
-      throw error;
+      console.error(`[EventPublisher] Failed to publish status update for order ${update.orderId}:`, error);
     }
   }
 
-  /**
-   * Get priority for different status types
-   * Higher priority = processed first
-   */
   private getPriority(status: OrderStatus): number {
     const priorities: Record<OrderStatus, number> = {
-      [OrderStatus.FAILED]: 10,      // Highest priority - critical errors
-      [OrderStatus.CONFIRMED]: 9,     // High priority - successful completion
-      [OrderStatus.SUBMITTED]: 8,     // High priority - transaction submitted
-      [OrderStatus.BUILDING]: 7,      // Medium-high priority
-      [OrderStatus.ROUTING]: 6,       // Medium priority
-      [OrderStatus.PENDING]: 5,       // Lower priority - initial state
+      [OrderStatus.FAILED]: 10,
+      [OrderStatus.CONFIRMED]: 9,
+      [OrderStatus.SUBMITTED]: 8,
+      [OrderStatus.BUILDING]: 7,
+      [OrderStatus.ROUTING]: 6,
+      [OrderStatus.PENDING]: 5,
     };
     return priorities[status] || 5;
   }
 
-  /**
-   * Get a specific status queue (for monitoring/debugging)
-   */
-  public getQueue(status: OrderStatus): Queue | undefined {
-    return this.queues.get(status);
+  public async getOrderQueue(orderId: string, status: OrderStatus): Promise<Queue | undefined> {
+    try {
+      const orderQueues = await this.getOrderQueues(orderId);
+      return orderQueues.get(status);
+    } catch {
+      return undefined;
+    }
   }
 
-  /**
-   * Get all queues (for monitoring/debugging)
-   */
-  public getAllQueues(): Map<OrderStatus, Queue> {
-    return this.queues;
+  public async getAllOrderQueues(orderId: string): Promise<Map<OrderStatus, Queue> | undefined> {
+    try {
+      return await this.getOrderQueues(orderId);
+    } catch {
+      return undefined;
+    }
   }
 
-  /**
-   * Close all queues gracefully
-   */
+  public async closeOrderQueues(orderId: string): Promise<void> {
+    const orderQueues = this.orderQueues.get(orderId);
+    if (orderQueues) {
+      const closePromises = Array.from(orderQueues.values()).map((queue) =>
+        queue.close()
+      );
+      await Promise.all(closePromises);
+      this.orderQueues.delete(orderId);
+      console.log(`[EventPublisher] Closed queues for order ${orderId}`);
+    }
+  }
+
   public async close(): Promise<void> {
-    const closePromises = Array.from(this.queues.values()).map((queue) =>
-      queue.close()
+    const closePromises = Array.from(this.orderQueues.values()).map((orderQueues) =>
+      Promise.all(Array.from(orderQueues.values()).map(queue => queue.close()))
     );
     await Promise.all(closePromises);
-    this.queues.clear();
+    this.orderQueues.clear();
   }
 }

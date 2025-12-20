@@ -5,7 +5,7 @@ import { registerOrderRoutes } from './routes/orders.routes';
 import { OrderWorker } from './workers/order.worker';
 import { WebSocketWorker } from './workers/websocket.worker';
 import { Database } from './config/database.config';
-import { RedisClient } from './config/redis.config';
+import { OrderRedisManager } from './services/order.redis.manager';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -41,21 +41,14 @@ async function buildServer() {
 async function start() {
   try {
     const db = Database.getInstance();
-    await db.query('SELECT 1'); 
+    await db.query('SELECT 1');
     console.log('✓ Database connected');
-    const redis = RedisClient.getInstance();
-    try {
-      await redis.ping();
-      console.log('✓ Redis connected');
-    } catch (error: any) {
-      console.error('\n❌ Redis connection failed!');
-      throw error;
-    }
+
     const orderWorker = OrderWorker.getInstance();
-    console.log('✓ Order worker started');
+    console.log('✓ Order worker manager initialized');
 
     const wsWorker = WebSocketWorker.getInstance();
-    console.log('✓ WebSocket worker started');
+    console.log('✓ WebSocket worker manager initialized');
 
     const server = await buildServer();
     await server.listen({ port: PORT, host: HOST });
@@ -63,11 +56,13 @@ async function start() {
 
     const shutdown = async (signal: string) => {
       console.log(`\n${signal} received, shutting down gracefully...`);
-      
+
+      const orderRedisManager = OrderRedisManager.getInstance();
+      await orderRedisManager.closeAllConnections();
+
       await server.close();
       await orderWorker.close();
       await wsWorker.close();
-      await redis.quit();
       console.log('✓ Server shut down complete');
       process.exit(0);
     };

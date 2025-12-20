@@ -6,11 +6,17 @@ import { WebSocketManager } from '../utils/websocket.manager';
 import { OrderUpdate } from '../types/order.types';
 import { handleRouteError } from '../utils/error.util';
 import { normalizeDate } from '../utils/date.util';
+import { OrderRedisManager } from '../services/order.redis.manager';
+import { WebSocketWorker } from '../workers/websocket.worker';
+import { OrderWorker } from '../workers/order.worker';
 
 export async function registerOrderRoutes(fastify: FastifyInstance) {
   const orderService = new OrderService();
   const orderQueue = OrderQueue.getInstance();
   const wsManager = WebSocketManager.getInstance();
+  const orderRedisManager = OrderRedisManager.getInstance();
+  const wsWorker = WebSocketWorker.getInstance();
+  const orderWorker = OrderWorker.getInstance();
 
   fastify.post('/api/orders/execute', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -18,16 +24,21 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
       console.log('[POST /api/orders/execute] Creating order with data:', validatedData);
       const order = await orderService.createOrder(validatedData);
       console.log(`[POST /api/orders/execute] Order created: ${order.orderId}`);
+
+      await orderRedisManager.createOrderConnection(order.orderId);
+      console.log(`[POST /api/orders/execute] Redis connection established for order: ${order.orderId}`);
+
+      await wsWorker.createOrderWorkers(order.orderId);
+      await orderWorker.createOrderWorker(order.orderId);
+      console.log(`[POST /api/orders/execute] Workers started for order: ${order.orderId}`);
+
       await orderQueue.addOrder(order.orderId);
       console.log(`[POST /api/orders/execute] Order queued: ${order.orderId}`);
-      
-      // Fetch the order from database to ensure it's committed and return full object
-      // In Docker, database operations may have network latency, so we retry with increasing delays
+
       let savedOrder = await orderService.getOrder(order.orderId);
       if (!savedOrder) {
         console.log(`[POST /api/orders/execute] Order not immediately available, retrying: ${order.orderId}`);
-        // Retry with exponential backoff for Docker/network latency
-        const retries = [200, 500, 1000]; // Increasing delays
+        const retries = [200, 500, 1000];
         for (const delay of retries) {
           await new Promise(resolve => setTimeout(resolve, delay));
           savedOrder = await orderService.getOrder(order.orderId);
@@ -36,10 +47,9 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
             break;
           }
         }
-        
+
         if (!savedOrder) {
           console.error(`[POST /api/orders/execute] Order still not found after all retries: ${order.orderId}`);
-          // Still return success with orderId - frontend can fetch it
           return reply.code(201).send({
             success: true,
             orderId: order.orderId,
@@ -48,7 +58,7 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
           });
         }
       }
-      
+
       console.log(`[POST /api/orders/execute] Order successfully created and retrieved: ${order.orderId}`);
       return reply.code(201).send({
         success: true,
@@ -63,9 +73,6 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // IMPORTANT: Register /api/orders BEFORE /api/orders/:orderId
-  // Fastify matches routes in registration order, so specific routes must come after general ones
-  // Handle both /api/orders and /api/orders/ (with trailing slash)
   fastify.get('/api/orders', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const query = request.query as { limit?: string; offset?: string };
@@ -87,7 +94,6 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Handle /api/orders/ (with trailing slash) - redirect to /api/orders or handle the same way
   fastify.get('/api/orders/', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const query = request.query as { limit?: string; offset?: string };
@@ -109,17 +115,14 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // This route must come AFTER /api/orders to avoid route conflicts
   fastify.get('/api/orders/:orderId', async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { orderId } = request.params as { orderId: string };
-      
-      // Safety check: if orderId looks invalid or empty, this might be a misrouted request
+
       if (!orderId || orderId.trim() === '' || orderId === 'orders' || orderId.includes('limit') || orderId.includes('offset')) {
         console.error(`[GET /api/orders/:orderId] Suspicious orderId parameter: "${orderId}". This might be a route conflict.`);
         console.error(`[GET /api/orders/:orderId] Request URL: ${request.url}`);
         console.error(`[GET /api/orders/:orderId] Request path: ${request.routerPath}`);
-        // Don't return 404 here - let it fall through or return a proper error
         return reply.code(400).send({
           success: false,
           error: 'Invalid order ID format',
@@ -150,7 +153,7 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
 
   fastify.get('/api/orders/:orderId/stream', { websocket: true }, async (connection, req) => {
     const { orderId } = req.params as { orderId: string };
-    
+
     connection.socket.send(JSON.stringify({
       type: 'connected',
       orderId,
@@ -158,13 +161,13 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
     }));
 
     wsManager.register(orderId, connection.socket);
-    
+
     setTimeout(async () => {
       try {
         const order = await orderService.getOrder(orderId);
         if (order) {
           const timestamp = normalizeDate(order.updatedAt);
-          
+
           const initialUpdate: OrderUpdate = {
             orderId: order.orderId,
             status: order.status,
@@ -174,14 +177,14 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
             errorReason: order.errorReason,
             timestamp: timestamp,
           };
-          
+
           await wsManager.emit(orderId, initialUpdate);
         }
       } catch (error) {
         console.error(`[WebSocket] Error fetching initial order status for ${orderId}:`, error);
       }
     }, 300);
-    
+
     connection.socket.on('message', (message: Buffer) => {
       try {
         const data = JSON.parse(message.toString());
