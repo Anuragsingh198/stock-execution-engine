@@ -154,6 +154,41 @@ export async function registerOrderRoutes(fastify: FastifyInstance) {
   fastify.get('/api/orders/:orderId/stream', { websocket: true }, async (connection, req) => {
     const { orderId } = req.params as { orderId: string };
 
+    try {
+      const order = await orderService.getOrder(orderId);
+      if (!order) {
+        connection.socket.send(JSON.stringify({
+          type: 'error',
+          error: 'Order not found',
+          orderId,
+          timestamp: new Date().toISOString(),
+        }));
+        connection.socket.close();
+        return;
+      }
+
+      if (orderRedisManager.isOrderConnectionActive(orderId)) {
+        try {
+          await wsWorker.createOrderWorkers(orderId);
+          orderRedisManager.resetTimeout(orderId);
+          console.log(`[WebSocket] Workers ensured and timeout reset for order ${orderId}`);
+        } catch (workerError) {
+          console.error(`[WebSocket] Failed to create workers for order ${orderId}:`, workerError);
+        }
+      } else {
+        console.log(`[WebSocket] Redis connection not active for order ${orderId}, attempting to recreate...`);
+        try {
+          await orderRedisManager.createOrderConnection(orderId);
+          await wsWorker.createOrderWorkers(orderId);
+          console.log(`[WebSocket] Redis connection and workers recreated for order ${orderId}`);
+        } catch (recreateError) {
+          console.error(`[WebSocket] Failed to recreate Redis connection for order ${orderId}:`, recreateError);
+        }
+      }
+    } catch (error) {
+      console.error(`[WebSocket] Error ensuring workers for order ${orderId}:`, error);
+    }
+
     connection.socket.send(JSON.stringify({
       type: 'connected',
       orderId,
